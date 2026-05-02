@@ -152,10 +152,7 @@ def run_pipeline():
 
     train_all_models(X_train_eng, y_train_eng, MODEL_DIR_ENGINEERED)
 
-    # Save the fitted scaler so the Streamlit app can load it without rerunning the pipeline
-    Path(MODEL_DIR_ENGINEERED).mkdir(parents=True, exist_ok=True)
-    joblib.dump(eng_scaler, Path(MODEL_DIR_ENGINEERED) / "scaler.pkl")
-    print(f"  Scaler saved → {MODEL_DIR_ENGINEERED}/scaler.pkl")
+    
 
     eng_test, _ = run_feature_pipeline(test_raw, scaler=eng_scaler, is_training=False)
     X_test_eng  = eng_test.drop(columns=[TARGET_COL])
@@ -163,7 +160,11 @@ def run_pipeline():
 
     print("\n  Engineered model results:")
     engineered_results = evaluate_all_models(X_test_eng, y_test_eng, MODEL_DIR_ENGINEERED)
-
+    
+    # Save the fitted scaler so the Streamlit app can load it without rerunning the pipeline
+    Path(MODEL_DIR_ENGINEERED).mkdir(parents=True, exist_ok=True)
+    joblib.dump(eng_scaler, Path(MODEL_DIR_ENGINEERED) / "scaler.pkl")
+    print(f"  Scaler saved → {MODEL_DIR_ENGINEERED}/scaler.pkl")
     # ══════════════════════════════════════════════════════════════════════════
     # STEP 5 — Head-to-head comparison
     # ══════════════════════════════════════════════════════════════════════════
