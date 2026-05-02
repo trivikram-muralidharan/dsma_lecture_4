@@ -67,7 +67,7 @@ DEC_SEED         = 42
 
 # ── W&B configuration ─────────────────────────────────────────────────────────
 
-WANDB_PROJECT = "dsma-lecture3"
+WANDB_PROJECT = "dsma-lecture4_tests"
 
 # Number of sweep trials — keep small for classroom runtime.
 # Random search: 15 trials across both model families.
@@ -498,7 +498,7 @@ def run_pipeline():
         print(f"  Drifted feature names  : {drift_results['drifted_features']}")
     print(f"  Selected strategy      : {selected_strategy}")
 
-    # Save the interactive HTML report so students can inspect it locally
+    # Save the interactive HTML report so you can inspect it locally
     Path("outputs").mkdir(exist_ok=True)
     evidently_html = Path("outputs") / "evidently_drift_report.html"
     evidently_report.save_html(str(evidently_html))
