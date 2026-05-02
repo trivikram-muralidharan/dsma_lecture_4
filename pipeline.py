@@ -60,13 +60,6 @@ MODEL_DIR_TUNED      = "models/tuned"
 MODEL_DIR_MITIGATED  = "models/mitigated"
 PLOTS_DIR            = "outputs/plots"
 MONTHLY_EVAL_PARQUET = "data/raw/last_weeks_all_months_2024.parquet"
-DEC_RAW_PARQUET      = "data/raw/yellow_tripdata_2024-12.parquet"
-
-# December data sampling — first 3 weeks = mitigation train, last week = eval.
-# Fixed seeds ensure reproducible splits every pipeline run.
-DEC_TRAIN_SAMPLE = 20_000
-DEC_EVAL_SAMPLE  = 5_000
-DEC_SEED         = 42
 
 # ── W&B configuration ─────────────────────────────────────────────────────────
 
@@ -459,30 +452,38 @@ def run_pipeline():
 
     _print_header("STEP 9.1 — Drift Detection (Evidently AI) — December 2024")
 
-    # Load + clean December data
-    dec_df = pd.read_parquet(DEC_RAW_PARQUET)
-    dec_df = clean_dataframe(dec_df)
-    dec_df["tpep_pickup_datetime"] = pd.to_datetime(dec_df["tpep_pickup_datetime"])
+    DRIFT_RAW_PARQUET      = "data/raw/yellow_tripdata_2024-12.parquet"
+
+    # December data sampling — first 3 weeks = mitigation train, last week = eval.
+    # Fixed seeds ensure reproducible splits every pipeline run.
+    DRIFT_TRAIN_SAMPLE = 20_000
+    DRIFT_EVAL_SAMPLE  = 5_000
+    DRIFT_SEED         = 42
+
+    # Load + clean Data of the month which we are checking drift for.
+    drift_df = pd.read_parquet(DRIFT_RAW_PARQUET)
+    drift_df = clean_dataframe(drift_df)
+    drift_df["tpep_pickup_datetime"] = pd.to_datetime(drift_df["tpep_pickup_datetime"])
 
     # Split by calendar date — first 3 weeks for mitigation, last week for eval
-    dec_train_raw = (
-        dec_df[dec_df["tpep_pickup_datetime"].dt.day <= 21]
-        .sample(DEC_TRAIN_SAMPLE, random_state=DEC_SEED)
+    drift_train_raw = (
+        drift_df[drift_df["tpep_pickup_datetime"].dt.day <= 21]
+        .sample(DRIFT_TRAIN_SAMPLE, random_state=DRIFT_SEED)
         .reset_index(drop=True)
     )
-    dec_eval_raw = (
-        dec_df[dec_df["tpep_pickup_datetime"].dt.day >= 22]
-        .sample(DEC_EVAL_SAMPLE, random_state=DEC_SEED)
+    drift_eval_raw = (
+        drift_df[drift_df["tpep_pickup_datetime"].dt.day >= 22]
+        .sample(DRIFT_EVAL_SAMPLE, random_state=DRIFT_SEED)
         .reset_index(drop=True)
     )
-    print(f"  Dec train set : {len(dec_train_raw):,} rows  (Dec 1–21,  seed={DEC_SEED})")
-    print(f"  Dec eval set  : {len(dec_eval_raw):,}  rows  (Dec 22–31, seed={DEC_SEED})")
+    print(f"  Dec train set : {len(drift_train_raw):,} rows  (Dec 1–21,  seed={DRIFT_SEED})")
+    print(f"  Dec eval set  : {len(drift_eval_raw):,}  rows  (Dec 22–31, seed={DRIFT_SEED})")
 
     # Engineer features with the January scaler — no refit.
     # We deliberately keep the old scaler so that any scale shift shows up
     # as drift in the Evidently report rather than being silently corrected.
-    dec_train_eng, _ = run_feature_pipeline(dec_train_raw, scaler=eng_scaler, is_training=False)
-    dec_eval_eng,  _ = run_feature_pipeline(dec_eval_raw,  scaler=eng_scaler, is_training=False)
+    dec_train_eng, _ = run_feature_pipeline(drift_train_raw, scaler=eng_scaler, is_training=False)
+    dec_eval_eng,  _ = run_feature_pipeline(drift_eval_raw,  scaler=eng_scaler, is_training=False)
 
     # Reconstruct reference DataFrame: January engineered features + target
     ref_eng_df = X_train_eng.copy()
@@ -554,7 +555,7 @@ def run_pipeline():
 
     # Save the evaluation set once — both models are scored against this file
     dec_eval_parquet = Path(PROCESSED_DIR) / "dec_eval.parquet"
-    dec_eval_raw.to_parquet(dec_eval_parquet, index=False)
+    drift_eval_raw.to_parquet(dec_eval_parquet, index=False)
 
     # Baseline: tuned champion evaluated on December last week (pre-mitigation)
     y_dec_eval      = dec_eval_eng[TARGET_COL].values
@@ -571,7 +572,7 @@ def run_pipeline():
     mitigated_model, mitigated_scaler, eval_steps = mitigate(
         strategy         = selected_strategy,
         train_df         = train_raw,
-        recent_df        = dec_train_raw,
+        recent_df        = drift_train_raw,
         model_name       = winning_family,
         model_dir        = MODEL_DIR_MITIGATED,
         base_model       = tuned_champion_model,
@@ -586,7 +587,7 @@ def run_pipeline():
     # feature steps if drop_features was used) so the eval is fair
     active_scaler = mitigated_scaler if mitigated_scaler is not None else eng_scaler
     dec_eval_eng_mit, _ = run_feature_pipeline(
-        dec_eval_raw, scaler=active_scaler,
+        drift_eval_raw, scaler=active_scaler,
         is_training=False, custom_creation_steps=eval_steps,
     )
 
@@ -615,9 +616,9 @@ def run_pipeline():
         config   = {
             "strategy":          selected_strategy,
             "drifted_features":  drift_results["drifted_features"],
-            "n_dec_train":       len(dec_train_raw),
-            "n_dec_eval":        len(dec_eval_raw),
-            "dec_seed":          DEC_SEED,
+            "n_dec_train":       len(drift_train_raw),
+            "n_dec_eval":        len(drift_eval_raw),
+            "dec_seed":          DRIFT_SEED,
         },
     )
     mitigation_tracker.log_summary({
@@ -631,7 +632,7 @@ def run_pipeline():
     # Version the evaluation dataset artifact (shared reference for both models)
     log_data_artifact(
         mitigation_tracker, dec_eval_parquet, "dec-eval-set",
-        metadata={"month": "December 2024", "n_rows": len(dec_eval_raw), "seed": DEC_SEED},
+        metadata={"month": "December 2024", "n_rows": len(drift_eval_raw), "seed": DRIFT_SEED},
     )
 
     # Save the mitigated scaler — needed to serve the mitigated model in production
