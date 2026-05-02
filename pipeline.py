@@ -23,6 +23,7 @@ it calls modules in order, passes outputs between them, and logs results to W&B
 through ExperimentTracker.  No business logic lives here.
 """
 
+import argparse
 import numpy as np
 np.float_ = np.float64
 import pandas as pd
@@ -103,7 +104,7 @@ def _comparison_table(baseline_results, engineered_results):
 
 # ── Pipeline ──────────────────────────────────────────────────────────────────
 
-def run_pipeline():
+def run_pipeline(wandb_project=WANDB_PROJECT):
 
     # ── Step 1: Data Cleaning ──────────────────────────────────────────────────
     _print_header("STEP 1 — Data Cleaning")
@@ -196,7 +197,7 @@ def run_pipeline():
     )
 
     tracker = ExperimentTracker(
-        project  = WANDB_PROJECT,
+        project  = wandb_project,
         run_name = "champion-eval",
         tags     = ["champion", "engineered-features"],
         config   = {"champion_model": champion_name},
@@ -234,7 +235,7 @@ def run_pipeline():
         X_train     = X_train_eng,
         y_train     = y_train_eng,
         sweep_config = RANDOM_SEARCH_CONFIG,
-        project     = WANDB_PROJECT,
+        project     = wandb_project,
         n_runs      = 15,
     )
     winning_family = best_random_config.get("model_type", "random_forest")
@@ -252,7 +253,7 @@ def run_pipeline():
         X_train      = X_train_eng,
         y_train      = y_train_eng,
         sweep_config = grid_config,
-        project      = WANDB_PROJECT,
+        project      = wandb_project,
         n_runs       = 50,   # grid sweeps run all combinations regardless of count
     )
     print(f"\n  Grid search complete.")
@@ -278,7 +279,7 @@ def run_pipeline():
     print(f"    RMSE : {tuned_rmse:.4f}  (champion baseline: {float(champion_row['rmse']):.4f})")
 
     tuning_tracker = ExperimentTracker(
-        project  = WANDB_PROJECT,
+        project  = wandb_project,
         run_name = f"tuned-{winning_family}",
         tags     = ["tuned", "grid-search"],
         config   = best_grid_config,
@@ -321,7 +322,7 @@ def run_pipeline():
     )
 
     error_tracker = ExperimentTracker(
-        project  = WANDB_PROJECT,
+        project  = wandb_project,
         run_name = "error-analysis",
         tags     = ["error-analysis", "tuned"],
         config   = {"model": winning_family, "n_test_samples": len(error_df)},
@@ -400,7 +401,7 @@ def run_pipeline():
             month_num    = int(row["month_num"]),
             mae          = float(row["mae"]),
             drift_report = drift_report,
-            project      = WANDB_PROJECT,
+            project      = wandb_project,
             mae_delta    = float(row["mae_delta"]),
             n_trips      = int(row["n_trips"]),
             label_drift  = {
@@ -416,7 +417,7 @@ def run_pipeline():
     worst = monthly_summary.loc[monthly_summary["mae_delta"].idxmax()]
     if worst["mae_pct_increase"] > 20:
         drift_tracker = ExperimentTracker(
-            project  = WANDB_PROJECT,
+            project  = wandb_project,
             run_name = "drift-summary",
             tags     = ["drift-detection"],
         )
@@ -617,7 +618,7 @@ def run_pipeline():
 
     # Log everything to a dedicated W&B run
     mitigation_tracker = ExperimentTracker(
-        project  = WANDB_PROJECT,
+        project  = wandb_project,
         run_name = f"mitigation-{selected_strategy}-{DRIFT_MONTH}",
         tags     = ["drift-mitigation", f"{DRIFT_MONTH}", selected_strategy],
         config   = {
@@ -689,4 +690,8 @@ def run_pipeline():
 
 
 if __name__ == "__main__":
-    run_pipeline()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--wandb-project", default=WANDB_PROJECT,
+                        help="W&B project name to log runs into")
+    args = parser.parse_args()
+    run_pipeline(wandb_project=args.wandb_project)
