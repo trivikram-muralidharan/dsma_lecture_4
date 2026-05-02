@@ -14,4 +14,4 @@ streamlit-folium>=0.18
 geopy>=2.4
 scipy>=1.11
 wandb>=0.16
-evidently>=0.4.0
+evidently==0.6.0

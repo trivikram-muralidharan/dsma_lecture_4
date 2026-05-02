@@ -49,7 +49,7 @@ from src.models   import save_model, CANDIDATE_MODELS
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-RECENCY_WEIGHT = 3.0  # sample weight multiplier for recent rows in reweight_retrain
+RECENCY_WEIGHT = 1.0  # sample weight multiplier for recent rows in reweight_retrain
 
 # Engineered feature name → the feature creation step function that produces it.
 # Used by drop_features to identify which pipeline steps to remove when a
@@ -82,8 +82,7 @@ def mitigate(strategy, train_df, recent_df, model_name, model_dir,
         model_name       : key into CANDIDATE_MODELS — used for the save filename
         model_dir        : directory to save the retrained model .pkl
         base_model       : fitted model whose hyperparameters to clone when
-                           retraining (e.g. tuned_champion_model). Falls back to
-                           the default CANDIDATE_MODELS entry when None.
+                           retraining (e.g. tuned_champion_model). 
         drifted_features : list of drifted engineered feature names from
                            parse_drift_results() — only used by "drop_features"
 
@@ -95,7 +94,7 @@ def mitigate(strategy, train_df, recent_df, model_name, model_dir,
         eval_steps — filtered FEATURE_CREATION_STEPS list for "drop_features",
                      None for all other strategies
     """
-    model_template = base_model if base_model is not None else CANDIDATE_MODELS[model_name]
+    model_template = base_model 
 
     if strategy == "none":
         print("  No mitigation needed.")

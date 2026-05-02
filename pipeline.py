@@ -13,7 +13,7 @@ Run this script to execute the complete end-to-end pipeline:
   Step 7   — Hyperparameter Tuning           (random search sweep → grid search sweep)
   Step 8   — Error Analysis                  (per-sample errors, segment breakdowns)
   Step 9   — Drift Detection                 (monthly MAE curve, PSI + KS report)
-  Step 9.1 — Drift Detection (Evidently AI)  (feature-level report on December data)
+  Step 9.1 — Drift Detection (Evidently AI)  (feature-level report on DRIFTED MONTH data)
   Step 10  — Drift Mitigation                (Evidently-driven strategy, before/after)
 
 Modularity note
@@ -437,24 +437,30 @@ def run_pipeline():
         print(f"\n  Drift summary logged → {url}")
 
     # ══════════════════════════════════════════════════════════════════════════
-    # STEP 9.1 — Drift Detection using Evidently AI — evaluated over December 2024
+    # STEP 9.1 — Drift Detection using Evidently AI — evaluated over Drifted Months in 2024
     #
-    # Loads December 2024 data and splits it by date:
-    #     First 3 weeks (Dec 1–21) → "current" distribution for Evidently
-    #     Last week     (Dec 22–31) → held-out evaluation set (no leakage)
+    # Loads Different months in 2024 data and splits it by date:
+    #     First 3 weeks (1–21) → "current" distribution for Evidently
+    #     Last week     (22–31) → held-out evaluation set (no leakage)
     #
-    # The Evidently report compares January 2024 training features vs. December 2024
+    # The Evidently report compares January 2024 training features vs. A Drifted month in 2024
     # first-3-weeks features and produces:
     #     An interactive HTML report saved to outputs/
     #     A structured drift_results dict used by Step 10
     #     A selected mitigation strategy string
     # ══════════════════════════════════════════════════════════════════════════
+    
+    DRIFT_MONTH = "Dec"
 
-    _print_header("STEP 9.1 — Drift Detection (Evidently AI) — December 2024")
+    _print_header(f"STEP 9.1 — Drift Detection (Evidently AI) — {DRIFT_MONTH} 2024")
+    
+    DRIFT_RAW_PARQUET      = {
+                            "Dec":"data/raw/yellow_tripdata_2024-12.parquet",
+                            "Sept":"data/raw/yellow_tripdata_2024-09.parquet",
+                            "July":"data/raw/yellow_tripdata_2024-07.parquet",
+                              }.get(DRIFT_MONTH)
 
-    DRIFT_RAW_PARQUET      = "data/raw/yellow_tripdata_2024-12.parquet"
-
-    # December data sampling — first 3 weeks = mitigation train, last week = eval.
+    # Drifted Month data sampling — first 3 weeks = mitigation train, last week = eval.
     # Fixed seeds ensure reproducible splits every pipeline run.
     DRIFT_TRAIN_SAMPLE = 20_000
     DRIFT_EVAL_SAMPLE  = 5_000
@@ -476,23 +482,23 @@ def run_pipeline():
         .sample(DRIFT_EVAL_SAMPLE, random_state=DRIFT_SEED)
         .reset_index(drop=True)
     )
-    print(f"  Dec train set : {len(drift_train_raw):,} rows  (Dec 1–21,  seed={DRIFT_SEED})")
-    print(f"  Dec eval set  : {len(drift_eval_raw):,}  rows  (Dec 22–31, seed={DRIFT_SEED})")
+    print(f"  Drift train set : {len(drift_train_raw):,} rows  ({DRIFT_MONTH} 1–21,  seed={DRIFT_SEED})")
+    print(f"  Drift eval set  : {len(drift_eval_raw):,}  rows  ({DRIFT_MONTH} 22–31, seed={DRIFT_SEED})")
 
     # Engineer features with the January scaler — no refit.
     # We deliberately keep the old scaler so that any scale shift shows up
     # as drift in the Evidently report rather than being silently corrected.
-    dec_train_eng, _ = run_feature_pipeline(drift_train_raw, scaler=eng_scaler, is_training=False)
-    dec_eval_eng,  _ = run_feature_pipeline(drift_eval_raw,  scaler=eng_scaler, is_training=False)
+    drift_train_eng, _ = run_feature_pipeline(drift_train_raw, scaler=eng_scaler, is_training=False)
+    drift_eval_eng,  _ = run_feature_pipeline(drift_eval_raw,  scaler=eng_scaler, is_training=False)
 
     # Reconstruct reference DataFrame: January engineered features + target
     ref_eng_df = X_train_eng.copy()
     ref_eng_df[TARGET_COL] = y_train_eng.values
 
-    # Run Evidently report: reference = Jan train, current = Dec first 3 weeks
+    # Run Evidently report: reference = Jan train, current = first 3 weeks of DRIFTED_MONTH
     # Covers dataset drift (DataDriftPreset) and label drift (TargetDriftPreset).
     print("\n  Running Evidently dataset + label drift report ...")
-    evidently_report = run_evidently_drift_report(ref_eng_df, dec_train_eng)
+    evidently_report = run_evidently_drift_report(ref_eng_df, drift_train_eng)
     drift_results    = parse_drift_results(evidently_report)
 
     print(f"\n  Overall drift detected : {drift_results['overall_drift']}")
@@ -508,22 +514,22 @@ def run_pipeline():
     evidently_report.save_html(str(evidently_html))
     print(f"\n  Evidently dataset drift HTML  → {evidently_html}")
 
-    # Concept drift: compare Jan test-set performance vs Dec eval performance.
+    # Concept drift: compare Jan test-set performance vs Drift month eval performance.
     # Uses RegressionPreset — needs actual labels + model predictions for both periods.
     print("\n  Running Evidently concept drift report ...")
     ref_perf_df = X_test_eng.copy()
     ref_perf_df[TARGET_COL]    = y_test_eng.values
     ref_perf_df["prediction"]  = tuned_champion_model.predict(X_test_eng)
 
-    cur_perf_df = dec_eval_eng.copy()
-    cur_perf_df["prediction"]  = tuned_champion_model.predict(dec_eval_eng.drop(columns=[TARGET_COL]))
+    cur_perf_df = drift_eval_eng.copy()
+    cur_perf_df["prediction"]  = tuned_champion_model.predict(drift_eval_eng.drop(columns=[TARGET_COL]))
 
     concept_drift_report   = run_evidently_concept_drift_report(ref_perf_df, cur_perf_df)
     concept_drift_results  = parse_concept_drift_results(concept_drift_report)
 
     print(f"\n  Concept drift detected : {concept_drift_results['concept_drift_detected']}")
     print(f"  Reference MAE (Jan)    : {concept_drift_results['ref_mae']:.4f} min")
-    print(f"  Current MAE (Dec eval) : {concept_drift_results['cur_mae']:.4f} min")
+    print(f"  Current MAE ({DRIFT_MONTH} eval) : {concept_drift_results['cur_mae']:.4f} min")
     print(f"  MAE increase           : {concept_drift_results['mae_pct_increase']:.1%}")
 
     concept_drift_html = Path("outputs") / "evidently_concept_drift_report.html"
@@ -537,31 +543,31 @@ def run_pipeline():
     # STEP 10 — Drift Mitigation + Before / After Comparison
     #
     # Uses the strategy selected by Evidently in Step 9.1.
-    # Evaluation uses the SAME held-out December last-week set for both
+    # Evaluation uses the SAME held-out DRIFT MONTH last-week set for both
     # the tuned champion and the mitigated model — fair, leakage-free.
     #
     # Three artifacts are versioned in W&B:
-    #   1. dec-eval-set      — the held-out evaluation parquet (data artifact)
+    #   1. drift-eval-set      — the held-out evaluation parquet (data artifact)
     #   2. mitigated-model   — the retrained model .pkl       (model artifact)
     #   (feature-pipeline artifact was already logged in Step 7)
     #
     # The comparison plot shows three error distributions side-by-side:
     #     Tuned champion on January   (in-distribution baseline)
-    #     Tuned champion on December  (pre-mitigation, drifted)
-    #     Mitigated model on December (post-mitigation)
+    #     Tuned champion on Drift Month  (pre-mitigation, drifted)
+    #     Mitigated model on Drift Month (post-mitigation)
     # ══════════════════════════════════════════════════════════════════════════
 
     _print_header("STEP 10 — Drift Mitigation + Before / After Comparison")
 
     # Save the evaluation set once — both models are scored against this file
-    dec_eval_parquet = Path(PROCESSED_DIR) / "dec_eval.parquet"
-    drift_eval_raw.to_parquet(dec_eval_parquet, index=False)
+    drift_eval_parquet = Path(PROCESSED_DIR) / "drift_eval.parquet"
+    drift_eval_raw.to_parquet(drift_eval_parquet, index=False)
 
-    # Baseline: tuned champion evaluated on December last week (pre-mitigation)
-    y_dec_eval      = dec_eval_eng[TARGET_COL].values
-    y_pred_dec_base = tuned_champion_model.predict(dec_eval_eng.drop(columns=[TARGET_COL]))
-    baseline_dec_mae = float(np.mean(np.abs(y_dec_eval - y_pred_dec_base)))
-    print(f"\n  Tuned champion MAE — Dec eval (pre-mitigation) : {baseline_dec_mae:.4f} min")
+    # Baseline: tuned champion evaluated on Drift Month last week (pre-mitigation)
+    y_drift_eval      = drift_eval_eng[TARGET_COL].values
+    y_pred_drift_base = tuned_champion_model.predict(drift_eval_eng.drop(columns=[TARGET_COL]))
+    baseline_drift_mae = float(np.mean(np.abs(y_drift_eval - y_pred_drift_base)))
+    print(f"\n  Tuned champion MAE — {DRIFT_MONTH} eval (pre-mitigation) : {baseline_drift_mae:.4f} min")
 
     if selected_strategy == "none":
         print("  No mitigation required — skipping Step 10.")
@@ -583,27 +589,27 @@ def run_pipeline():
     if mitigated_model is None:
         mitigated_model = tuned_champion_model
 
-    # Re-engineer the December eval set with the updated scaler (and filtered
+    # Re-engineer the DRIFT MONTH eval set with the updated scaler (and filtered
     # feature steps if drop_features was used) so the eval is fair
     active_scaler = mitigated_scaler if mitigated_scaler is not None else eng_scaler
-    dec_eval_eng_mit, _ = run_feature_pipeline(
+    drift_eval_eng_mit, _ = run_feature_pipeline(
         drift_eval_raw, scaler=active_scaler,
         is_training=False, custom_creation_steps=eval_steps,
     )
 
-    # Evaluate mitigated model on the same held-out December eval set
-    y_pred_dec_mit   = mitigated_model.predict(dec_eval_eng_mit.drop(columns=[TARGET_COL]))
-    mitigated_dec_mae = float(np.mean(np.abs(y_dec_eval - y_pred_dec_mit)))
-    improvement_pct   = (baseline_dec_mae - mitigated_dec_mae) / baseline_dec_mae * 100
-    print(f"  Mitigated model MAE — Dec eval (post-mitigation) : {mitigated_dec_mae:.4f} min")
+    # Evaluate mitigated model on the same held-out DRIFT MONTH eval set
+    y_pred_drift_mit   = mitigated_model.predict(drift_eval_eng_mit.drop(columns=[TARGET_COL]))
+    mitigated_drift_mae = float(np.mean(np.abs(y_drift_eval - y_pred_drift_mit)))
+    improvement_pct   = (baseline_drift_mae - mitigated_drift_mae) / baseline_drift_mae * 100
+    print(f"  Mitigated model MAE — Drift eval (post-mitigation) : {mitigated_drift_mae:.4f} min")
     print(f"  Improvement                                       : {improvement_pct:+.1f}%")
 
     # Build the three-way comparison plot
     comparison_fig = plot_mitigation_comparison(
         {
             "Champion — Jan (in-dist)":             np.abs(y_test_eng.values - y_pred_tuned),
-            "Champion — Dec (drifted)":             np.abs(y_dec_eval - y_pred_dec_base),
-            f"Mitigated ({selected_strategy}) — Dec": np.abs(y_dec_eval - y_pred_dec_mit),
+            f"Champion — {DRIFT_MONTH} (drifted)":             np.abs(y_drift_eval - y_pred_drift_base),
+            f"Mitigated ({selected_strategy}) — {DRIFT_MONTH}": np.abs(y_drift_eval - y_pred_drift_mit),
         },
         output_dir = PLOTS_DIR,
     )
@@ -611,28 +617,28 @@ def run_pipeline():
     # Log everything to a dedicated W&B run
     mitigation_tracker = ExperimentTracker(
         project  = WANDB_PROJECT,
-        run_name = f"mitigation-{selected_strategy}",
-        tags     = ["drift-mitigation", selected_strategy],
+        run_name = f"mitigation-{selected_strategy}-{DRIFT_MONTH}",
+        tags     = ["drift-mitigation", f"{DRIFT_MONTH}", selected_strategy],
         config   = {
             "strategy":          selected_strategy,
             "drifted_features":  drift_results["drifted_features"],
-            "n_dec_train":       len(drift_train_raw),
-            "n_dec_eval":        len(drift_eval_raw),
-            "dec_seed":          DRIFT_SEED,
+            "n_drift_train":       len(drift_train_raw),
+            "n_drift_eval":        len(drift_eval_raw),
+            "drift_seed":          DRIFT_SEED,
         },
     )
     mitigation_tracker.log_summary({
         "jan_mae":             float(np.mean(np.abs(y_test_eng.values - y_pred_tuned))),
-        "baseline_dec_mae":    baseline_dec_mae,
-        "mitigated_dec_mae":   mitigated_dec_mae,
+        "baseline_drift_mae":    baseline_drift_mae,
+        "mitigated_drift_mae":   mitigated_drift_mae,
         "mae_improvement_pct": improvement_pct,
     })
     mitigation_tracker.log_plot(comparison_fig, "mitigation_comparison")
 
     # Version the evaluation dataset artifact (shared reference for both models)
     log_data_artifact(
-        mitigation_tracker, dec_eval_parquet, "dec-eval-set",
-        metadata={"month": "December 2024", "n_rows": len(drift_eval_raw), "seed": DRIFT_SEED},
+        mitigation_tracker, drift_eval_parquet, f"{DRIFT_MONTH}-eval-set",
+        metadata={"month": f"{DRIFT_MONTH} 2024", "n_rows": len(drift_eval_raw), "seed": DRIFT_SEED},
     )
 
     # Save the mitigated scaler — needed to serve the mitigated model in production
@@ -642,7 +648,7 @@ def run_pipeline():
     # Feature columns the mitigated model actually uses (ground truth, not step names).
     # For drop_features this differs from the original X_train_eng columns.
     mitigated_feature_cols = [
-        c for c in dec_eval_eng_mit.columns if c != TARGET_COL
+        c for c in drift_eval_eng_mit.columns if c != TARGET_COL
     ]
 
     # Version the mitigated feature pipeline artifact
@@ -666,7 +672,7 @@ def run_pipeline():
             "mitigated-model",
             metadata={
                 "strategy":          selected_strategy,
-                "mae":               mitigated_dec_mae,
+                "mae":               mitigated_drift_mae,
                 "improvement_pct":   improvement_pct,
                 "drifted_features":  drift_results["drifted_features"],
             },
