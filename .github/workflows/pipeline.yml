@@ -46,42 +46,43 @@ on:
 jobs:
 
   # ── Job 1: Data validation ───────────────────────────────────────────────────
-  # validate:
-  #   name: Validate incoming data
-  #   runs-on: ubuntu-latest
+  validate:
+    name: Install dependencies
+    runs-on: ubuntu-latest
 
-  #   steps:
-  #     - name: Checkout repository
-  #       uses: actions/checkout@v4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-  #     - name: Set up Python
-  #       uses: actions/setup-python@v5
-  #       with:
-  #         python-version: "3.11"
-  #         cache: "pip"
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
 
-  #     - name: Install dependencies
-  #       run: pip install -r requirements.txt
+      - name: Install dependencies
+        run: pip install -r requirements.txt
 
-  #     - name: Run data validation
-  #       run: |
-  #         python - <<'EOF'
-  #         from src.validation import validate_nyc_taxi_parquet
-  #         result = validate_nyc_taxi_parquet("data/raw/yellow_tripdata_2024-01.parquet")
-  #         print(result)
-  #         if not result["success"]:
-  #             print("in the loop")
-  #             failed = [r for r in result["results"] if not r["passed"]]
-  #             print(f"Validation failed ({len(failed)} checks):")
-  #             for r in failed:
-  #                 print(f"  • {r['name']}: {r['detail']}")
-  #             raise SystemExit(1)
-  #         print(f"Validation passed — {len(result['results'])} checks OK")
-  #         EOF
+      # - name: Run data validation
+      #   run: |
+      #     python - <<'EOF'
+      #     from src.validation import validate_nyc_taxi_parquet
+      #     result = validate_nyc_taxi_parquet("data/raw/yellow_tripdata_2024-01.parquet")
+      #     print(result)
+      #     if not result["success"]:
+      #         print("in the loop")
+      #         failed = [r for r in result["results"] if not r["passed"]]
+      #         print(f"Validation failed ({len(failed)} checks):")
+      #         for r in failed:
+      #             print(f"  • {r['name']}: {r['detail']}")
+      #         raise SystemExit(1)
+      #     print(f"Validation passed — {len(result['results'])} checks OK")
+      #     EOF
 
-  #── Job 2: Train + drift detection ──────────────────────────────────────────
+  # ── Job 2: Train + drift detection ──────────────────────────────────────────
   train-and-detect:
     name: Train pipeline + detect drift
+    needs: validate
     runs-on: ubuntu-latest
 
     env:
