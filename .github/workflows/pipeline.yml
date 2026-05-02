@@ -79,10 +79,9 @@ jobs:
   #         print(f"Validation passed — {len(result['results'])} checks OK")
   #         EOF
 
-  # ── Job 2: Train + drift detection ──────────────────────────────────────────
+  ── Job 2: Train + drift detection ──────────────────────────────────────────
   train-and-detect:
     name: Train pipeline + detect drift
-    needs: validate
     runs-on: ubuntu-latest
 
     env:
