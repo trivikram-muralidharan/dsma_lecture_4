@@ -41,6 +41,8 @@ from src.drift_detection           import (load_monthly_eval, run_monthly_drift_
                                            plot_monthly_mae_curve,
                                            plot_label_drift_distribution)
 from src.drift_detection_evidently import (run_evidently_drift_report, parse_drift_results,
+                                           run_evidently_concept_drift_report,
+                                           parse_concept_drift_results,
                                            select_mitigation_strategy)
 from src.drift_mitigation          import mitigate, plot_mitigation_comparison
 from src.versioning                import log_data_artifact, log_model_artifact, log_feature_artifact
@@ -486,23 +488,48 @@ def run_pipeline():
     ref_eng_df[TARGET_COL] = y_train_eng.values
 
     # Run Evidently report: reference = Jan train, current = Dec first 3 weeks
-    print("\n  Running Evidently drift report ...")
-    evidently_report  = run_evidently_drift_report(ref_eng_df, dec_train_eng)
-    drift_results     = parse_drift_results(evidently_report)
-    selected_strategy = select_mitigation_strategy(drift_results)
+    # Covers dataset drift (DataDriftPreset) and label drift (TargetDriftPreset).
+    print("\n  Running Evidently dataset + label drift report ...")
+    evidently_report = run_evidently_drift_report(ref_eng_df, dec_train_eng)
+    drift_results    = parse_drift_results(evidently_report)
 
     print(f"\n  Overall drift detected : {drift_results['overall_drift']}")
     print(f"  Features drifted       : {drift_results['n_drifted']} "
           f"({drift_results['share_drifted']:.1%} of feature columns)")
     if drift_results["drifted_features"]:
         print(f"  Drifted feature names  : {drift_results['drifted_features']}")
-    print(f"  Selected strategy      : {selected_strategy}")
+    print(f"  Target (label) drift   : {drift_results['target_drift']}  "
+          f"(score={drift_results['target_drift_score']:.4f})")
 
-    # Save the interactive HTML report so you can inspect it locally
     Path("outputs").mkdir(exist_ok=True)
     evidently_html = Path("outputs") / "evidently_drift_report.html"
     evidently_report.save_html(str(evidently_html))
-    print(f"\n  Evidently HTML report  → {evidently_html}")
+    print(f"\n  Evidently dataset drift HTML  → {evidently_html}")
+
+    # Concept drift: compare Jan test-set performance vs Dec eval performance.
+    # Uses RegressionPreset — needs actual labels + model predictions for both periods.
+    print("\n  Running Evidently concept drift report ...")
+    ref_perf_df = X_test_eng.copy()
+    ref_perf_df[TARGET_COL]    = y_test_eng.values
+    ref_perf_df["prediction"]  = tuned_champion_model.predict(X_test_eng)
+
+    cur_perf_df = dec_eval_eng.copy()
+    cur_perf_df["prediction"]  = tuned_champion_model.predict(dec_eval_eng.drop(columns=[TARGET_COL]))
+
+    concept_drift_report   = run_evidently_concept_drift_report(ref_perf_df, cur_perf_df)
+    concept_drift_results  = parse_concept_drift_results(concept_drift_report)
+
+    print(f"\n  Concept drift detected : {concept_drift_results['concept_drift_detected']}")
+    print(f"  Reference MAE (Jan)    : {concept_drift_results['ref_mae']:.4f} min")
+    print(f"  Current MAE (Dec eval) : {concept_drift_results['cur_mae']:.4f} min")
+    print(f"  MAE increase           : {concept_drift_results['mae_pct_increase']:.1%}")
+
+    concept_drift_html = Path("outputs") / "evidently_concept_drift_report.html"
+    concept_drift_report.save_html(str(concept_drift_html))
+    print(f"\n  Evidently concept drift HTML  → {concept_drift_html}")
+
+    selected_strategy = select_mitigation_strategy(drift_results, concept_drift_results)
+    print(f"\n  Selected strategy      : {selected_strategy}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # STEP 10 — Drift Mitigation + Before / After Comparison

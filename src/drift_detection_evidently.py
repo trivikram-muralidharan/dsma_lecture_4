@@ -5,24 +5,28 @@ NYC TLC — Drift Detection (Evidently AI)
 A parallel drift detection module that uses Evidently AI alongside the existing
 PSI / KS approach in drift_detection.py.
 
-Three public functions form a clean pipeline:
+Five public functions form a clean pipeline:
 
-  run_evidently_drift_report   →  Evidently Report object (save as HTML, inspect)
-  parse_drift_results          →  plain dict of drift statistics
-  select_mitigation_strategy   →  strategy string consumed by drift_mitigation.mitigate()
+  run_evidently_drift_report          →  Evidently Report (DataDrift + TargetDrift)
+  parse_drift_results                 →  plain dict of dataset + label drift statistics
+  run_evidently_concept_drift_report  →  Evidently Report (RegressionPreset)
+  parse_concept_drift_results         →  plain dict of concept drift / performance statistics
+  select_mitigation_strategy          →  strategy string consumed by drift_mitigation.mitigate()
 
-The strategy selection is driven entirely by the Evidently report output.
-All thresholds are configurable at the top of this file — adjust them to change
-how aggressively drift is flagged and which strategy is triggered.
+Dataset drift (DataDriftPreset) measures P(X) shift — feature distributions.
+Target drift  (TargetDriftPreset) measures P(Y) shift — label distribution.
+Concept drift (RegressionPreset) measures P(Y|X) shift — model performance degradation.
 
-Both reference and current DataFrames must contain ENGINEERED features (i.e. the
-output of run_feature_pipeline), not raw columns.  This lets Evidently reason about
-the exact representation the model sees at prediction time.
+The strategy selection is driven by both dataset and concept drift signals.
+All thresholds are configurable at the top of this file.
+
+DataFrames for run_evidently_drift_report must contain ENGINEERED features + TARGET_COL.
+DataFrames for run_evidently_concept_drift_report must also contain a 'prediction' column.
 """
 
 import pandas as pd
 from evidently.report import Report
-from evidently.metric_preset import DataDriftPreset, TargetDriftPreset
+from evidently.metric_preset import DataDriftPreset, TargetDriftPreset, RegressionPreset
 from evidently import ColumnMapping
 
 from src.features import TARGET_COL
@@ -45,6 +49,10 @@ DRIFT_THRESHOLDS = {
     # Minimum number of severely drifted features needed to prefer
     # "drop_features" over "reweight_retrain".
     "min_severe_features": 2,
+
+    # MAE percentage increase (0.0–1.0) above which concept drift is flagged.
+    # 0.20 = model MAE has grown by more than 20% vs. the reference period.
+    "concept_drift_mae_pct": 0.20,
 }
 
 
@@ -134,24 +142,119 @@ def parse_drift_results(report: Report) -> dict:
         if col != TARGET_COL
     }
 
+    # ── Target / label drift (from TargetDriftPreset) ────────────────────────
+    # TargetDriftPreset emits a ColumnDriftMetric entry for TARGET_COL.
+    # This measures P(Y) shift — useful signal, but not the same as concept drift.
+    target_col_metric = next(
+        (m for m in metrics
+         if m["metric"] == "ColumnDriftMetric"
+         and m.get("result", {}).get("column_name") == TARGET_COL),
+        None,
+    )
+    target_drift_detected = False
+    target_drift_score    = 0.0
+    if target_col_metric:
+        target_drift_detected = bool(target_col_metric["result"].get("drift_detected", False))
+        target_drift_score    = float(target_col_metric["result"].get("drift_score", 0.0))
+
     return {
-        "overall_drift":    overall_drift,
-        "share_drifted":    share_drifted,
-        "n_drifted":        n_drifted,
-        "drifted_features": drifted_features,
-        "drift_scores":     drift_scores,
+        "overall_drift":      overall_drift,
+        "share_drifted":      share_drifted,
+        "n_drifted":          n_drifted,
+        "drifted_features":   drifted_features,
+        "drift_scores":       drift_scores,
+        "target_drift":       target_drift_detected,
+        "target_drift_score": target_drift_score,
+    }
+
+
+# ── Concept drift report ──────────────────────────────────────────────────────
+
+def run_evidently_concept_drift_report(reference_df: pd.DataFrame,
+                                        current_df:   pd.DataFrame) -> Report:
+    """
+    Run a RegressionPreset Evidently report to detect concept drift (P(Y|X) shift).
+
+    Concept drift is not detectable from feature distributions alone — it requires
+    comparing actual model performance on reference vs. current data.  This report
+    uses ground-truth labels and model predictions to compute MAE, RMSE, and error
+    distributions for both periods.
+
+    Args:
+        reference_df : Jan test set — must contain feature columns, TARGET_COL,
+                       and a 'prediction' column (model predictions on that set).
+        current_df   : Dec eval set — same column schema as reference_df.
+
+    Returns:
+        Evidently Report object (save as HTML, or call .as_dict()).
+    """
+    feature_cols = [c for c in reference_df.columns
+                    if c not in (TARGET_COL, "prediction")]
+
+    col_map = ColumnMapping(
+        target             = TARGET_COL,
+        prediction         = "prediction",
+        numerical_features = feature_cols,
+    )
+
+    report = Report(metrics=[RegressionPreset()])
+    report.run(
+        reference_data = reference_df,
+        current_data   = current_df,
+        column_mapping = col_map,
+    )
+    return report
+
+
+def parse_concept_drift_results(report: Report) -> dict:
+    """
+    Extract concept drift statistics from a RegressionPreset Evidently report.
+
+    Returns a dict with:
+      concept_drift_detected (bool)  — True if current MAE exceeds reference by
+                                       more than DRIFT_THRESHOLDS['concept_drift_mae_pct']
+      ref_mae                (float) — reference period MAE (Jan test set)
+      cur_mae                (float) — current period MAE  (Dec eval set)
+      mae_pct_increase       (float) — fractional MAE increase (e.g. 0.25 = 25%)
+    """
+    metrics = report.as_dict()["metrics"]
+
+    quality_metric = next(
+        (m for m in metrics if m["metric"] == "RegressionQualityMetric"),
+        None,
+    )
+
+    ref_mae = 0.0
+    cur_mae = 0.0
+    if quality_metric:
+        ref_mae = float(quality_metric["result"].get("reference", {}).get("mean_abs_error", 0.0))
+        cur_mae = float(quality_metric["result"].get("current",   {}).get("mean_abs_error", 0.0))
+
+    mae_pct_increase       = (cur_mae - ref_mae) / ref_mae if ref_mae > 0 else 0.0
+    concept_drift_detected = mae_pct_increase > DRIFT_THRESHOLDS["concept_drift_mae_pct"]
+
+    return {
+        "concept_drift_detected": concept_drift_detected,
+        "ref_mae":                ref_mae,
+        "cur_mae":                cur_mae,
+        "mae_pct_increase":       mae_pct_increase,
     }
 
 
 # ── Strategy selection ────────────────────────────────────────────────────────
 
-def select_mitigation_strategy(drift_results: dict) -> str:
+def select_mitigation_strategy(drift_results: dict,
+                                concept_drift_results: dict = None) -> str:
     """
-    Choose a mitigation strategy based on Evidently drift results.
+    Choose a mitigation strategy based on Evidently dataset and concept drift results.
 
     Decision logic (thresholds are set in DRIFT_THRESHOLDS above):
 
-      1. No overall drift detected
+      0. Concept drift detected (MAE degraded > concept_drift_mae_pct threshold)
+             → "reweight_retrain"  P(Y|X) has changed; the model itself needs updating
+                                   regardless of whether feature distributions shifted.
+
+      1. No overall dataset drift detected (and no concept drift)
              → "none"        nothing to do
 
       2. Overall drift, but few columns affected (share ≤ mild_drift_share)
@@ -165,9 +268,20 @@ def select_mitigation_strategy(drift_results: dict) -> str:
       4. Otherwise (widespread drift, no single dominant bad feature)
              → "reweight_retrain"  combine old + recent data with recency bias
 
+    Args:
+        drift_results         : output of parse_drift_results()
+        concept_drift_results : output of parse_concept_drift_results(), or None
+
     Returns:
         one of: "none" | "recalibrate" | "reweight_retrain" | "drop_features"
     """
+    # Concept drift takes priority — a degrading model must be retrained even
+    # if the input feature distributions look superficially unchanged.
+    if concept_drift_results and concept_drift_results["concept_drift_detected"]:
+        pct = concept_drift_results["mae_pct_increase"]
+        print(f"  Concept drift detected: MAE increased by {pct:.1%} — strategy: reweight_retrain")
+        return "reweight_retrain"
+
     if not drift_results["overall_drift"]:
         print("  No overall drift detected.")
         return "none"
