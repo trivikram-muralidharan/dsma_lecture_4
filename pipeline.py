@@ -24,6 +24,7 @@ through ExperimentTracker.  No business logic lives here.
 """
 
 import numpy as np
+np.float_ = np.float64
 import pandas as pd
 import joblib
 from pathlib import Path
@@ -573,6 +574,7 @@ def run_pipeline():
         recent_df        = dec_train_raw,
         model_name       = winning_family,
         model_dir        = MODEL_DIR_MITIGATED,
+        base_model       = tuned_champion_model,
         drifted_features = drift_results["drifted_features"],
     )
 

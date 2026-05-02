@@ -71,7 +71,7 @@ FEATURE_SOURCE_MAP = {
 # ── Public entry point ────────────────────────────────────────────────────────
 
 def mitigate(strategy, train_df, recent_df, model_name, model_dir,
-             drifted_features=None):
+             base_model=None, drifted_features=None):
     """
     Apply the chosen drift mitigation strategy.
 
@@ -79,8 +79,11 @@ def mitigate(strategy, train_df, recent_df, model_name, model_dir,
         strategy         : "none" | "recalibrate" | "reweight_retrain" | "drop_features"
         train_df         : original training data (raw, Jan 2024)
         recent_df        : recent data for retraining (raw, Dec first 3 weeks)
-        model_name       : key into CANDIDATE_MODELS (e.g. "random_forest")
+        model_name       : key into CANDIDATE_MODELS — used for the save filename
         model_dir        : directory to save the retrained model .pkl
+        base_model       : fitted model whose hyperparameters to clone when
+                           retraining (e.g. tuned_champion_model). Falls back to
+                           the default CANDIDATE_MODELS entry when None.
         drifted_features : list of drifted engineered feature names from
                            parse_drift_results() — only used by "drop_features"
 
@@ -92,6 +95,8 @@ def mitigate(strategy, train_df, recent_df, model_name, model_dir,
         eval_steps — filtered FEATURE_CREATION_STEPS list for "drop_features",
                      None for all other strategies
     """
+    model_template = base_model if base_model is not None else CANDIDATE_MODELS[model_name]
+
     if strategy == "none":
         print("  No mitigation needed.")
         return None, None, None
@@ -101,12 +106,12 @@ def mitigate(strategy, train_df, recent_df, model_name, model_dir,
         return None, scaler, None
 
     if strategy == "reweight_retrain":
-        model, scaler = _reweight_retrain(train_df, recent_df, model_name, model_dir)
+        model, scaler = _reweight_retrain(train_df, recent_df, model_name, model_dir, model_template)
         return model, scaler, None
 
     if strategy == "drop_features":
         model, scaler, eval_steps = _drop_and_retrain(
-            train_df, recent_df, model_name, model_dir, drifted_features or []
+            train_df, recent_df, model_name, model_dir, drifted_features or [], model_template
         )
         return model, scaler, eval_steps
 
@@ -125,7 +130,7 @@ def _recalibrate(recent_df: pd.DataFrame) -> StandardScaler:
     return scaler
 
 
-def _reweight_retrain(train_df, recent_df, model_name, model_dir):
+def _reweight_retrain(train_df, recent_df, model_name, model_dir, model_template):
     """Retrain on old + recent data, giving recent rows RECENCY_WEIGHT× sample weight."""
     print(f"  Combining {len(train_df):,} old rows (w=1.0) + "
           f"{len(recent_df):,} recent rows (w={RECENCY_WEIGHT})")
@@ -140,7 +145,7 @@ def _reweight_retrain(train_df, recent_df, model_name, model_dir):
     X = features.drop(columns=[TARGET_COL])
     y = features[TARGET_COL]
 
-    model = clone(CANDIDATE_MODELS[model_name])
+    model = clone(model_template)
     model.fit(X, y, sample_weight=weights)
 
     Path(model_dir).mkdir(parents=True, exist_ok=True)
@@ -149,7 +154,7 @@ def _reweight_retrain(train_df, recent_df, model_name, model_dir):
     return model, scaler
 
 
-def _drop_and_retrain(train_df, recent_df, model_name, model_dir, drifted_features):
+def _drop_and_retrain(train_df, recent_df, model_name, model_dir, drifted_features, model_template):
     """Remove feature steps that produce drifted features, retrain on combined data."""
     steps_to_drop = {
         FEATURE_SOURCE_MAP[feat]
@@ -169,7 +174,7 @@ def _drop_and_retrain(train_df, recent_df, model_name, model_dir, drifted_featur
     X = features.drop(columns=[TARGET_COL])
     y = features[TARGET_COL]
 
-    model = clone(CANDIDATE_MODELS[model_name])
+    model = clone(model_template)
     model.fit(X, y)
 
     Path(model_dir).mkdir(parents=True, exist_ok=True)
