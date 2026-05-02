@@ -52,7 +52,7 @@ DRIFT_THRESHOLDS = {
 
     # MAE percentage increase (0.0–1.0) above which concept drift is flagged.
     # 0.20 = model MAE has grown by more than 20% vs. the reference period.
-    "concept_drift_mae_pct": 0.20,
+    "concept_drift_mae_pct": 0.10,
 }
 
 
