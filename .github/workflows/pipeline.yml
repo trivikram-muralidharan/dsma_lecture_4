@@ -62,6 +62,7 @@ jobs:
           python - <<'EOF'
           from src.validation import validate_nyc_taxi_parquet
           result = validate_nyc_taxi_parquet("data/raw/yellow_tripdata_2024-01.parquet")
+          print(result)
           if not result["success"]:
               failed = [r for r in result["results"] if not r["success"]]
               print(f"Validation failed ({len(failed)} checks):")
