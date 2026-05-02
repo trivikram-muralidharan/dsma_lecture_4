@@ -70,10 +70,11 @@ jobs:
           result = validate_nyc_taxi_parquet("data/raw/yellow_tripdata_2024-01.parquet")
           print(result)
           if not result["success"]:
-              failed = [r for r in result["results"] if not r["success"]]
+              print("in the loop")
+              failed = [r for r in result["results"] if not r["passed"]]
               print(f"Validation failed ({len(failed)} checks):")
               for r in failed:
-                  print(f"  • {r['check']}: {r['message']}")
+                  print(f"  • {r['name']}: {r['detail']}")
               raise SystemExit(1)
           print(f"Validation passed — {len(result['results'])} checks OK")
           EOF
