@@ -49,7 +49,7 @@ from src.models   import save_model, CANDIDATE_MODELS
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-RECENCY_WEIGHT = 1.0  # sample weight multiplier for recent rows in reweight_retrain
+RECENCY_WEIGHT = 3.0  # sample weight multiplier for recent rows in reweight_retrain
 
 # Engineered feature name → the feature creation step function that produces it.
 # Used by drop_features to identify which pipeline steps to remove when a
